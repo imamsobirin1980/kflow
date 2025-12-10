@@ -1,0 +1,34 @@
+# Ignore Rust build artifacts
+/target/
+
+# If using incremental compilation cache
+/debug/
+
+# Ignore compiled binary output in project root
+/kflow
+
+# Ignore editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# Node modules if any
+node_modules/
+
+# Misc
+dist/
+build/

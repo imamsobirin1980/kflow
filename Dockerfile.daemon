@@ -1,0 +1,31 @@
+# Multi-stage Dockerfile to build the 'daemon' binary and create a small runtime image
+FROM rust:1.88-bullseye as builder
+WORKDIR /usr/src/kflow
+
+# Cache cargo registry/build dependencies where possible
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+# Install build deps for crates that need system libs (adjust if not needed)
+RUN apt-get update \
+    && apt-get install -y pkg-config libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build release binary for the named bin target 'daemon'
+RUN cargo build --release --bin daemon
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# create a non-root user
+RUN useradd -m -u 1000 appuser || true
+
+# Copy the compiled binary from the builder stage
+COPY --from=builder /usr/src/kflow/target/release/daemon /usr/local/bin/daemon
+RUN chown appuser:appuser /usr/local/bin/daemon
+
+USER appuser
+ENTRYPOINT ["/usr/local/bin/daemon"]
+CMD []
