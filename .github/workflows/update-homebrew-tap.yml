@@ -1,0 +1,37 @@
+name: Update Homebrew Tap
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tap repository
+        uses: actions/checkout@v3
+        with:
+          repository: AlexsJones/homebrew-kflow
+          token: ${{ secrets.TAP_TOKEN }}
+          path: homebrew-kflow
+
+      - name: Update formula
+        run: |
+          version=${GITHUB_REF#refs/tags/v}
+          url="https://github.com/AlexsJones/kflow/archive/refs/tags/v${version}.tar.gz"
+          sha256=$(curl -sL "${url}" | sha256sum | cut -d' ' -f1)
+          formula="homebrew-kflow/Formula/kflow.rb"
+          sed -i.bak "s|url \".*\"|url \"${url}\"|g" $formula
+          sed -i.bak "s|sha256 \".*\"|sha256 \"${sha256}\"|g" $formula
+          sed -i.bak "s|version \".*\"|version \"${version}\"|g" $formula
+
+      - name: Commit and push
+        run: |
+          cd homebrew-kflow
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/kflow.rb
+          git commit -m "Update kflow formula for ${GITHUB_REF#refs/tags/v}" || echo "No changes to commit"
+          git push
