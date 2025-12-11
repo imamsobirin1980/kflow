@@ -30,6 +30,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set IMAGE_OWNER (lower-cased)
+        run: |
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          echo "IMAGE_OWNER=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: "Build and push multi-arch image (tag: latest)"
         uses: docker/build-push-action@v4
         with:
@@ -38,10 +43,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/kflow:latest
+            ghcr.io/${{ env.IMAGE_OWNER }}/kflow:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Output image
-        run: echo "Pushed ghcr.io/${{ github.repository_owner }}/kflow:latest"
+        run: echo "Pushed ghcr.io/${{ env.IMAGE_OWNER }}/kflow:latest"
 
