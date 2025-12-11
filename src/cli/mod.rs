@@ -2,6 +2,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -12,7 +13,7 @@ pub mod kubectl;
 pub mod fetch;
 pub mod tui;
 
-use types::{Connection, ConnectionsResponse};
+use types::Connection;
 use kubectl::{run_kubectl_apply, run_kubectl_delete, discover_pods};
 use fetch::{fetch_url, fetch_via_portforward};
 use tui::run_tui;
@@ -85,11 +86,13 @@ pub async fn run_cli() -> anyhow::Result<()> {
         vec![]
     };
 
+    let did_fetch_once = Arc::new(AtomicBool::new(false));
     if args.kube || !endpoints_list.is_empty() {
         let state_clone = state.clone();
         let endpoints_clone = endpoints_list.clone();
         let start_port = args.start_port;
         let kube_mode = args.kube;
+        let did_fetch = did_fetch_once.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(2));
             loop {
@@ -113,10 +116,11 @@ pub async fn run_cli() -> anyhow::Result<()> {
                 }
                 let mut w = state_clone.write().await;
                 *w = map;
+                did_fetch.store(true, Ordering::SeqCst);
             }
         });
     }
 
-    run_tui(state).await?;
+    run_tui(state, args.kube, did_fetch_once).await?;
     Ok(())
 }

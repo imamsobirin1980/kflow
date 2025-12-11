@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -11,7 +12,7 @@ use ratatui::style::{Style, Color, Modifier};
 
 use crate::cli::types::Connection;
 
-pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> anyhow::Result<()> {
+pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_mode: bool, did_fetch_once: Arc<AtomicBool>) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -38,6 +39,7 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> an
     let mut search_buffer = String::new();
     let mut search_ip: Option<String> = None;
 
+    let mut modal_dismissed = false;
     loop {
         let map = state.read().await.clone();
         let mut nodes: Vec<_> = map.keys().cloned().collect();
@@ -61,15 +63,18 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> an
         }
 
         let mut edges: HashMap<(String, String), (usize, String)> = HashMap::new();
-        for (ip, nodes_with_ip) in &ip_to_nodes {
-            if nodes_with_ip.len() < 2 { continue; }
-            for i in 0..nodes_with_ip.len() {
-                for j in (i+1)..nodes_with_ip.len() {
-                    let a = &nodes_with_ip[i];
-                    let b = &nodes_with_ip[j];
-                    let key = if a <= b { (a.clone(), b.clone()) } else { (b.clone(), a.clone()) };
-                    let entry = edges.entry(key).or_insert((0usize, ip.clone()));
-                    entry.0 += 1;
+        for (node, conns) in &map {
+            for c in conns {
+                for (other_node, other_ips) in &ip_sets {
+                    if other_node == node { continue; }
+                    if other_ips.contains(&c.src_ip) || other_ips.contains(&c.dst_ip) {
+                        let a = node;
+                        let b = other_node;
+                        let key = if a <= b { (a.clone(), b.clone()) } else { (b.clone(), a.clone()) };
+                        let sample_ip = if other_ips.contains(&c.src_ip) { c.src_ip.clone() } else { c.dst_ip.clone() };
+                        let entry = edges.entry(key).or_insert((0usize, sample_ip));
+                        entry.0 += 1;
+                    }
                 }
             }
         }
@@ -88,8 +93,13 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> an
 
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(25), Constraint::Percentage(35), Constraint::Percentage(40)].as_ref())
+                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)].as_ref())
                 .split(top);
+
+            let right_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(35), Constraint::Percentage(65)].as_ref())
+                .split(chunks[1]);
 
             let items: Vec<ListItem> = nodes.iter().map(|n| {
                 let c = map.get(n).map(|v| v.len()).unwrap_or(0);
@@ -116,54 +126,61 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> an
                 .block(Block::default().borders(Borders::ALL).title("Shared"))
                 .highlight_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                 .highlight_symbol("» ");
-            f.render_stateful_widget(shared_list, chunks[1], &mut shared_state);
+            f.render_stateful_widget(shared_list, right_chunks[0], &mut shared_state);
 
             let selected_node = nodes.get(selected).cloned();
             if show_details {
-                if let Some(node) = selected_node {
-                    let mut conns: Vec<Connection> = map.get(&node).cloned().unwrap_or_default();
-                    if let Some((ref a, ref b)) = pair_filter {
-                        if node == *a {
-                            if let Some(other_ips) = ip_sets.get(b) {
-                                conns.retain(|c| other_ips.contains(&c.src_ip) || other_ips.contains(&c.dst_ip));
-                            } else { conns.clear(); }
-                        } else if node == *b {
-                            if let Some(other_ips) = ip_sets.get(a) {
-                                conns.retain(|c| other_ips.contains(&c.src_ip) || other_ips.contains(&c.dst_ip));
-                            } else { conns.clear(); }
-                        } else {
-                            conns.clear();
+                let mut conns: Vec<Connection> = Vec::new();
+                if let Some((ref a, ref b)) = pair_filter {
+                    if let Some(list_a) = map.get(a) {
+                        if let Some(other_ips) = ip_sets.get(b) {
+                            for c in list_a.iter() {
+                                if other_ips.contains(&c.src_ip) || other_ips.contains(&c.dst_ip) {
+                                    conns.push(c.clone());
+                                }
+                            }
                         }
                     }
-
-                    if let Some(ref ip) = search_ip {
-                        conns.retain(|c| c.src_ip.contains(ip) || c.dst_ip.contains(ip));
-                    }
-
-                    match filter_mode {
-                        FilterMode::Established => {
-                            conns.retain(|c| c.state.eq_ignore_ascii_case("ESTABLISHED"));
+                    if let Some(list_b) = map.get(b) {
+                        if let Some(other_ips) = ip_sets.get(a) {
+                            for c in list_b.iter() {
+                                if other_ips.contains(&c.src_ip) || other_ips.contains(&c.dst_ip) {
+                                    conns.push(c.clone());
+                                }
+                            }
                         }
-                        FilterMode::TimeWait => {
-                            conns.retain(|c| c.state.eq_ignore_ascii_case("TIME_WAIT") || c.state.eq_ignore_ascii_case("TIME-WAIT"));
-                        }
-                        FilterMode::None => {}
                     }
+                } else if let Some(node) = selected_node {
+                    conns = map.get(&node).cloned().unwrap_or_default();
+                }
 
-                    if let SortMode::ByState = sort_mode {
-                        conns.sort_by(|a, b| a.state.cmp(&b.state));
+                if let Some(ref ip) = search_ip {
+                    conns.retain(|c| c.src_ip.contains(ip) || c.dst_ip.contains(ip));
+                }
+
+                match filter_mode {
+                    FilterMode::Established => {
+                        conns.retain(|c| c.state.eq_ignore_ascii_case("ESTABLISHED"));
                     }
+                    FilterMode::TimeWait => {
+                        conns.retain(|c| c.state.eq_ignore_ascii_case("TIME_WAIT") || c.state.eq_ignore_ascii_case("TIME-WAIT"));
+                    }
+                    FilterMode::None => {}
+                }
 
-                    let items: Vec<ListItem> = conns.iter().map(|c| {
-                        let line = format!("{:<6} {:<22} {:<22} {:<12}", c.proto, format!("{}:{}", c.src_ip, c.src_port), format!("{}:{}", c.dst_ip, c.dst_port), c.state);
-                        ListItem::new(line)
-                    }).collect();
+                if let SortMode::ByState = sort_mode {
+                    conns.sort_by(|a, b| a.state.cmp(&b.state));
+                }
 
+                let items: Vec<ListItem> = conns.iter().map(|c| {
+                    let line = format!("{:<6} {:<22} {:<22} {:<12}", c.proto, format!("{}:{}", c.src_ip, c.src_port), format!("{}:{}", c.dst_ip, c.dst_port), c.state);
+                    ListItem::new(line)
+                }).collect();
+
+                if !items.is_empty() {
                     let mut list_state = ratatui::widgets::ListState::default();
-                    if !items.is_empty() {
-                        if conn_selected >= items.len() { conn_selected = items.len() - 1; }
-                        list_state.select(Some(conn_selected));
-                    }
+                    if conn_selected >= items.len() { conn_selected = items.len() - 1; }
+                    list_state.select(Some(conn_selected));
 
                     let title = match sort_mode {
                         SortMode::None => "Connections",
@@ -173,30 +190,46 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> an
                         .block(Block::default().borders(Borders::ALL).title(title))
                         .highlight_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
                         .highlight_symbol("» ");
-                    f.render_stateful_widget(list, chunks[2], &mut list_state);
+                    f.render_stateful_widget(list, right_chunks[1], &mut list_state);
                 } else {
                     let paragraph = Paragraph::new("(no node selected)")
                         .block(Block::default().borders(Borders::ALL).title("Connections"));
-                    f.render_widget(paragraph, chunks[2]);
+                    f.render_widget(paragraph, right_chunks[1]);
                 }
             } else {
                 let paragraph = Paragraph::new("Press Right or Enter to view connections for the selected node. Use Up/Down to choose a node. Press 't' to toggle sort by state. Press 'f' to cycle state filter. Press 'p' to search by IP. Press 'q' to quit.")
                     .block(Block::default().borders(Borders::ALL).title("Connections"));
-                f.render_widget(paragraph, chunks[2]);
+                f.render_widget(paragraph, right_chunks[1]);
             }
-
             let focus_str = match focus { Focus::Nodes => "Nodes", Focus::Shared => "Shared", Focus::Connections => "Connections" };
             let focus_color = match focus { Focus::Nodes => Color::Cyan, Focus::Shared => Color::Magenta, Focus::Connections => Color::Green };
             let status = format!("Focus: {} | Filter: {} | Search: {}{}",
                 focus_str,
                 match filter_mode { FilterMode::None => "none".to_string(), FilterMode::Established => "ESTABLISHED".to_string(), FilterMode::TimeWait => "TIME_WAIT".to_string(), },
                 search_ip.as_deref().unwrap_or("<none>"),
-                if let InputMode::Searching = input_mode { format!(" | typing: {}", search_buffer) } else { "".to_string() }
+                match input_mode {
+                    InputMode::Searching => format!(" | typing: {}", search_buffer),
+                    _ => "".to_string(),
+                }
             );
             let sb = Paragraph::new(status)
                 .block(Block::default().borders(Borders::ALL).title("Status"))
                 .style(Style::default().fg(focus_color));
             f.render_widget(sb, status_area);
+
+            let modal_visible = kube_mode && nodes.is_empty() && did_fetch_once.load(Ordering::SeqCst) && !modal_dismissed;
+            if modal_visible {
+                let mw = (size.width.saturating_mul(60)) / 100;
+                let mh = (size.height.saturating_mul(30)) / 100;
+                let mx = size.x + (size.width.saturating_sub(mw)) / 2;
+                let my = size.y + (size.height.saturating_sub(mh)) / 2;
+                let area = ratatui::layout::Rect::new(mx, my, mw, mh);
+                let text = "No kflow-daemon pods found. Run `kflow install -n <ns>` or apply the provided k8s/daemonset.yaml. Press Enter or Esc to dismiss.";
+                let p = Paragraph::new(text)
+                    .block(Block::default().borders(Borders::ALL).title("No Daemon Pods"))
+                    .style(Style::default().fg(Color::Red));
+                f.render_widget(p, area);
+            }
         })?;
 
         let conn_count = if let Some(node) = state.read().await.keys().cloned().collect::<Vec<_>>().get(selected) {
@@ -214,6 +247,17 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> an
         let timeout = refresh_interval.checked_sub(last_refresh.elapsed()).unwrap_or_default();
         if event::poll(timeout)? {
             if let event::Event::Key(key) = event::read()? {
+                let modal_visible = kube_mode && nodes.is_empty() && !modal_dismissed;
+                if modal_visible {
+                    match key.code {
+                        event::KeyCode::Enter | event::KeyCode::Esc | event::KeyCode::Char('c') => {
+                            modal_dismissed = true;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 if let InputMode::Searching = input_mode {
                     match key.code {
                         event::KeyCode::Esc => {
@@ -272,25 +316,36 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>) -> an
                                     focus = Focus::Connections;
                                     conn_selected = 0;
                                 }
+                            } else if let Focus::Nodes = focus {
+                                pair_filter = None;
+                                show_details = true;
+                                focus = Focus::Connections;
+                                conn_selected = 0;
                             } else {
                                 show_details = !show_details;
                                 if show_details { focus = Focus::Connections; } else { focus = Focus::Nodes; }
                             }
                         }
                         event::KeyCode::Right | event::KeyCode::Tab => {
+                            let prev = match focus { Focus::Nodes => Focus::Nodes, Focus::Shared => Focus::Shared, Focus::Connections => Focus::Connections };
                             focus = match focus {
                                 Focus::Nodes => Focus::Shared,
                                 Focus::Shared => Focus::Connections,
                                 Focus::Connections => Focus::Nodes,
                             };
-                            if let Focus::Connections = focus { if !show_details { show_details = true; } }
+                            if let Focus::Connections = focus {
+                                if !show_details { show_details = true; }
+                                if let Focus::Nodes = prev { pair_filter = None; }
+                            }
                         }
                         event::KeyCode::Left => {
+                            let prev = match focus { Focus::Nodes => Focus::Nodes, Focus::Shared => Focus::Shared, Focus::Connections => Focus::Connections };
                             focus = match focus {
                                 Focus::Nodes => Focus::Connections,
                                 Focus::Shared => Focus::Nodes,
                                 Focus::Connections => Focus::Shared,
                             };
+                            if let Focus::Connections = focus { if let Focus::Nodes = prev { pair_filter = None; } }
                         }
                         event::KeyCode::Char('r') => {}
                         event::KeyCode::Char('t') => {
