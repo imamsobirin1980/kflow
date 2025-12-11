@@ -9,9 +9,21 @@ __Coming soon: Throughput metrics to rank connections__
 
 ## Installation
 
+### Cargo
 ```
 cargo install kflow
-kflow install
+```
+
+### Brew
+```
+brew tap AlexsJones/kflow
+brew install kflow
+```
+
+
+### Usage
+```
+kflow install # Installs the daemonset
 kflow # opens tui
 ```
 
