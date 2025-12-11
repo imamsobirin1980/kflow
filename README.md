@@ -15,6 +15,8 @@ kflow install
 kflow # opens tui
 ```
 
+_Press h for keybinding information_
+
 
 ### Privileges
 
