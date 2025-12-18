@@ -183,13 +183,10 @@ fn update_manifest_conntrack(manifest: &str, ct_repl: &str) -> String {
     for i in 0..lines.len() {
         let trimmed = lines[i].trim_start();
         if trimmed.starts_with("name:") && trimmed.contains("CONNTRACK_PATH") {
-            // look ahead for a value: line
             for j in (i+1)..((i+6).min(lines.len())) {
                 let t = lines[j].trim_start();
                 if t.starts_with("value:") {
-                    // preserve indentation
                     let indent = &lines[j][..lines[j].find(t).unwrap_or(0)];
-                    // preserve quote style if present
                     let rest = t["value:".len()..].trim_start();
                     let quote = if rest.starts_with('"') { '"' } else if rest.starts_with('\'') { '\'' } else { '"' };
                     let new_val = if ct_repl == "auto" {

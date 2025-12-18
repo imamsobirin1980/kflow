@@ -9,20 +9,8 @@ __Coming soon: Throughput metrics to rank connections__
 
 ## Installation
 
-### Cargo
 ```
 cargo install kflow
-```
-
-### Brew
-```
-brew tap AlexsJones/kflow
-brew install kflow
-```
-
-
-### Usage
-```
 kflow install # Installs the daemonset
 kflow # opens tui
 ```
@@ -88,6 +76,58 @@ Examples:
 - You mounted host `/proc` at a different location inside the pod (advanced):
 
 	Edit `k8s/daemonset.yaml` so the volumeMount and `CONNTRACK_PATH` agree, or pass the exact path the daemon can see inside the container with `--conntrack`.
+
+### Enable conntrack accounting (bytes)
+
+To see non-zero per-connection byte counters and throughput in kflow, you must enable conntrack accounting on each node. This is a kernel setting and must be configured on the host (we do not change it from inside the pod).
+
+**For kind clusters:**
+
+```sh
+# Enable on control-plane
+docker exec kind-control-plane sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
+
+# Enable on each worker node
+docker exec kind-worker sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
+docker exec kind-worker2 sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
+# repeat for all workers
+```
+
+**For regular nodes:**
+
+```sh
+sudo sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
+```
+
+Make it persistent across reboots via sysctl:
+
+```sh
+echo 'net.netfilter.nf_conntrack_acct=1' | sudo tee /etc/sysctl.d/99-kflow.conf
+sudo sysctl --system
+```
+
+**Verify bytes are recorded:**
+
+On the node:
+```sh
+sudo head -5 /proc/net/nf_conntrack
+```
+
+Or from a kflow pod:
+```sh
+kubectl exec -n <namespace> <kflow-pod> -- head -5 /host/proc/net/nf_conntrack
+```
+
+If `bytes=` fields are present and increasing (e.g., `bytes=1234 packets=10`), kflow will compute per-connection throughput automatically. **Note:** Only NEW connections created after enabling accounting will show byte counters.
+
+**Troubleshooting bytes=0:**
+
+If you see `bytes: 0` and `throughput_bytes_per_sec: 0` in kflow even after enabling `nf_conntrack_acct`:
+
+1. Verify accounting is enabled: `cat /proc/sys/net/netfilter/nf_conntrack_acct` should return `1`
+2. Check if bytes appear in conntrack output: `sudo cat /proc/net/nf_conntrack | grep bytes`
+3. The setting only affects *new* connections. Existing connections won't show bytes retroactively. Generate new traffic or wait for connections to be re-established.
+4. Check daemon logs for sample conntrack lines: `kubectl logs -n <namespace> <pod-name>` (with `KFLOW_DEBUG=true`)
 
 ### Auto-detect mode
 

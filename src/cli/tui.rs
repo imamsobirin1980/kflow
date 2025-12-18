@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
+use std::fs;
+use trust_dns_resolver::TokioAsyncResolver;
 
 use crossterm::{event, execute, terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}};
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -120,6 +122,19 @@ fn rfc1700_snippet_for_port(port: u16) -> String {
     port_reservation_info(port)
 }
 
+fn format_throughput(bytes_per_sec: u64) -> String {
+    if bytes_per_sec == 0 {
+        return "-".to_string();
+    }
+    if bytes_per_sec < 1024 {
+        format!("{}B/s", bytes_per_sec)
+    } else if bytes_per_sec < 1024 * 1024 {
+        format!("{:.1}KB/s", bytes_per_sec as f64 / 1024.0)
+    } else {
+        format!("{:.1}MB/s", bytes_per_sec as f64 / (1024.0 * 1024.0))
+    }
+}
+
 fn port_reservation_info(port: u16) -> String {
     // Expanded common services map (sourced from IANA / Wikipedia list subset)
     match port {
@@ -188,6 +203,84 @@ fn port_reservation_info(port: u16) -> String {
     }
 }
 
+fn load_hosts_file() -> HashMap<String, String> {
+    let mut hosts = HashMap::new();
+    if let Ok(content) = fs::read_to_string("/etc/hosts") {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let ip = parts[0];
+                let hostname = parts[1];
+                hosts.insert(ip.to_string(), hostname.to_string());
+            }
+        }
+    }
+    hosts
+}
+
+async fn spawn_dns_resolver(
+    state: Arc<RwLock<HashMap<String, Vec<Connection>>>>,
+    hosts_cache: Arc<RwLock<HashMap<String, String>>>,
+) {
+    let resolver = match TokioAsyncResolver::tokio_from_system_conf() {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+
+    let mut seen_ips = HashSet::new();
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        
+        let map = state.read().await;
+        let mut ips_to_resolve = Vec::new();
+        
+        for conns in map.values() {
+            for c in conns {
+                if !seen_ips.contains(&c.src_ip) {
+                    ips_to_resolve.push(c.src_ip.clone());
+                    seen_ips.insert(c.src_ip.clone());
+                }
+                if !seen_ips.contains(&c.dst_ip) {
+                    ips_to_resolve.push(c.dst_ip.clone());
+                    seen_ips.insert(c.dst_ip.clone());
+                }
+            }
+        }
+        drop(map);
+
+        for ip in ips_to_resolve {
+            if let Ok(addr) = ip.parse::<std::net::IpAddr>() {
+                if let Ok(lookup) = resolver.reverse_lookup(addr).await {
+                    if let Some(name) = lookup.iter().next() {
+                        let hostname = name.to_string().trim_end_matches('.').to_string();
+                        hosts_cache.write().await.insert(ip.clone(), hostname);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn truncate_ipv6(ip: &str, max_len: usize) -> String {
+    if ip.contains(':') && ip.len() > max_len {
+        format!("{}...", &ip[..max_len.saturating_sub(3)])
+    } else {
+        ip.to_string()
+    }
+}
+
+fn display_ip(ip: &str, hosts: &HashMap<String, String>, show_hostnames: bool) -> String {
+    if show_hostnames {
+        hosts.get(ip).cloned().unwrap_or_else(|| truncate_ipv6(ip, 18))
+    } else {
+        truncate_ipv6(ip, 18)
+    }
+}
+
 pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_mode: bool, did_fetch_once: Arc<AtomicBool>) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -202,7 +295,14 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
     enum SortMode { None, ByState }
     enum FilterMode { None, Established, TimeWait }
     enum InputMode { Normal, Searching }
+    enum IpVersionFilter { Both, Ipv4Only, Ipv6Only }
 
+    let hosts_cache = Arc::new(RwLock::new(load_hosts_file()));
+    let mut show_hostnames = false;
+    let mut ip_version_filter = IpVersionFilter::Both;
+    
+    tokio::spawn(spawn_dns_resolver(state.clone(), hosts_cache.clone()));
+    
     let mut selected = 0usize;
     let mut show_details = false;
     let mut focus = Focus::Nodes;
@@ -260,6 +360,8 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
         let mut edge_list: Vec<((String, String), (usize, String))> = edges.into_iter().collect();
         edge_list.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
 
+        let hosts = hosts_cache.read().await.clone();
+
         terminal.draw(|f| {
             let size = f.area();
             let outer = Layout::default()
@@ -271,7 +373,7 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
 
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)].as_ref())
+                .constraints([Constraint::Percentage(20), Constraint::Percentage(80)].as_ref())
                 .split(top);
 
             let right_chunks = Layout::default()
@@ -281,7 +383,12 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
 
             let items: Vec<ListItem> = nodes.iter().map(|n| {
                 let c = map.get(n).map(|v| v.len()).unwrap_or(0);
-                ListItem::new(format!("{} ({})", n, c))
+                let name = if n.len() > 15 {
+                    format!("{:12}...", &n[..12])
+                } else {
+                    n.to_string()
+                };
+                ListItem::new(format!("{} ({})", name, c))
             }).collect();
             let mut stateful = ratatui::widgets::ListState::default();
             if !nodes.is_empty() {
@@ -346,15 +453,34 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
                     FilterMode::None => {}
                 }
 
-                if let SortMode::ByState = sort_mode {
-                    conns.sort_by(|a, b| a.state.cmp(&b.state));
+                match ip_version_filter {
+                    IpVersionFilter::Ipv4Only => {
+                        conns.retain(|c| !c.src_ip.contains(':') && !c.dst_ip.contains(':'));
+                    }
+                    IpVersionFilter::Ipv6Only => {
+                        conns.retain(|c| c.src_ip.contains(':') || c.dst_ip.contains(':'));
+                    }
+                    IpVersionFilter::Both => {}
+                }
+
+                // Default: rank by throughput descending unless explicitly sorting by state
+                match sort_mode {
+                    SortMode::ByState => {
+                        conns.sort_by(|a, b| a.state.cmp(&b.state));
+                    }
+                    SortMode::None => {
+                        conns.sort_by(|a, b| b.throughput_bytes_per_sec.cmp(&a.throughput_bytes_per_sec));
+                    }
                 }
 
                 let items: Vec<ListItem> = conns.iter().map(|c| {
-                    let src = format!("{}:{}", c.src_ip, c.src_port);
-                    let dst = format!("{}:{}", c.dst_ip, c.dst_port);
+                    let src_ip_str = display_ip(&c.src_ip.to_string(), &hosts, show_hostnames);
+                    let dst_ip_str = display_ip(&c.dst_ip.to_string(), &hosts, show_hostnames);
+                    let src = format!("{}:{}", src_ip_str, c.src_port);
+                    let dst = format!("{}:{}", dst_ip_str, c.dst_port);
                     let port_info = port_reservation_info(c.dst_port);
-                    let line = format!("{:<6} {:<22} {:<22} {:<12} {:<20}", c.proto, src, dst, c.state, port_info);
+                    let throughput = format_throughput(c.throughput_bytes_per_sec);
+                    let line = format!("{:<6} {:<22} {:<22} {:<12} {:<12} {:<20}", c.proto, src, dst, c.state, throughput, port_info);
                     ListItem::new(line)
                 }).collect();
 
@@ -364,7 +490,7 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
                     list_state.select(Some(conn_selected));
 
                     let title = match sort_mode {
-                        SortMode::None => "Connections",
+                        SortMode::None => "Connections (ranked by throughput)",
                         SortMode::ByState => "Connections (sorted by state)",
                     };
 
@@ -416,10 +542,13 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
             }
             let focus_str = match focus { Focus::Nodes => "Nodes", Focus::Shared => "Shared", Focus::Connections => "Connections" };
             let focus_color = match focus { Focus::Nodes => Color::Cyan, Focus::Shared => Color::Magenta, Focus::Connections => Color::Green };
-            let status = format!("Focus: {} | Filter: {} | Search: {}{}",
+            let ip_filter_str = match ip_version_filter { IpVersionFilter::Both => "both", IpVersionFilter::Ipv4Only => "IPv4", IpVersionFilter::Ipv6Only => "IPv6" };
+            let status = format!("Focus: {} | Filter: {} | Search: {} | Names: {} | IP: {}{}",
                 focus_str,
                 match filter_mode { FilterMode::None => "none".to_string(), FilterMode::Established => "ESTABLISHED".to_string(), FilterMode::TimeWait => "TIME_WAIT".to_string(), },
                 search_term.as_deref().unwrap_or("<none>"),
+                if show_hostnames { "ON" } else { "OFF" },
+                ip_filter_str,
                 match input_mode {
                     InputMode::Searching => format!(" | typing: {}", search_buffer),
                     _ => "".to_string(),
@@ -434,11 +563,11 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
             // If the user requested the help modal, show that on top of everything.
                 if help_modal {
                 let mw = (size.width.saturating_mul(70)) / 100;
-                let mh = (size.height.saturating_mul(60)) / 100;
+                let mh = (size.height.saturating_mul(70)) / 100;
                 let mx = size.x + (size.width.saturating_sub(mw)) / 2;
                 let my = size.y + (size.height.saturating_sub(mh)) / 2;
                 let area = ratatui::layout::Rect::new(mx, my, mw, mh);
-                let help_text = "Key bindings:\n\nUp/Down: move selection\nLeft/Right or Tab: change focus pane\nEnter: open connections / toggle details\nq: quit\np: start search (type term, Enter to apply, Esc to cancel)\nEsc: cancel typing / dismiss modal\nt: toggle sort by state\nf: cycle state filter (none -> ESTABLISHED -> TIME_WAIT)\nc: clear pair-filter\nh: show this help\n\nPress Enter, Esc, or 'h' to close.";
+                let help_text = "Key bindings:\n\nUp/Down: move selection\nLeft/Right or Tab: change focus pane\nEnter: open connections / toggle details\nq: quit\np: start search (type term, Enter to apply, Esc to cancel)\nEsc: cancel typing / dismiss modal\nt: toggle sort by state\nf: cycle state filter (none -> ESTABLISHED -> TIME_WAIT)\nc: clear pair-filter\nn: toggle hostnames / IPs\nv: cycle IP version filter (both -> IPv4 -> IPv6)\nh: show this help\n\nPress Enter, Esc, or 'h' to close.";
                 // clear area behind modal and draw a dark background so text is readable
                 f.render_widget(Clear, area);
                 let p = Paragraph::new(help_text)
@@ -467,7 +596,10 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
                 FilterMode::TimeWait => c.retain(|x| x.state.eq_ignore_ascii_case("TIME_WAIT") || x.state.eq_ignore_ascii_case("TIME-WAIT")),
                 FilterMode::None => {}
             }
-            if let SortMode::ByState = sort_mode { c.sort_by(|a,b| a.state.cmp(&b.state)); }
+            match sort_mode {
+                SortMode::ByState => c.sort_by(|a,b| a.state.cmp(&b.state)),
+                SortMode::None => c.sort_by(|a,b| b.throughput_bytes_per_sec.cmp(&a.throughput_bytes_per_sec)),
+            }
             c.len()
         } else { 0 };
 
@@ -610,6 +742,16 @@ pub async fn run_tui(state: Arc<RwLock<HashMap<String, Vec<Connection>>>>, kube_
                         }
                         event::KeyCode::Char('c') => {
                             pair_filter = None;
+                        }
+                        event::KeyCode::Char('n') => {
+                            show_hostnames = !show_hostnames;
+                        }
+                        event::KeyCode::Char('v') => {
+                            ip_version_filter = match ip_version_filter {
+                                IpVersionFilter::Both => IpVersionFilter::Ipv4Only,
+                                IpVersionFilter::Ipv4Only => IpVersionFilter::Ipv6Only,
+                                IpVersionFilter::Ipv6Only => IpVersionFilter::Both,
+                            };
                         }
                         _ => {}
                     }

@@ -8,6 +8,10 @@ pub struct Connection {
     pub dst_ip: String,
     pub dst_port: u16,
     pub state: String,
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default)]
+    pub throughput_bytes_per_sec: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

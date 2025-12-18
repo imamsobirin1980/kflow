@@ -1,18 +1,21 @@
 # Multi-stage Dockerfile to build the 'daemon' binary and create a small runtime image
-FROM rust:1.88-bullseye as builder
+FROM rust:1.88-slim as builder
 WORKDIR /usr/src/kflow
 
-# Cache cargo registry/build dependencies where possible
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY k8s/daemonset.yaml k8s/daemonset.yaml
-
-# Install build deps for crates that need system libs (adjust if not needed)
 RUN apt-get update \
     && apt-get install -y pkg-config libssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Build release binary for the named bin target 'daemon'
+COPY Cargo.toml Cargo.lock ./
+
+RUN mkdir src && \
+    echo "fn main() {}" > src/lib.rs && \
+    cargo build --release --lib 2>&1 | grep -v "warning:" || true && \
+    rm -rf src
+
+COPY src ./src
+COPY k8s/daemonset.yaml k8s/daemonset.yaml
+
 RUN cargo build --release --bin daemon
 
 FROM debian:bookworm-slim

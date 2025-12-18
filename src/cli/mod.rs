@@ -21,8 +21,10 @@ use tui::run_tui;
 #[command(name = "kflow-cli")]
 struct Args {
     #[arg(long)]
-    #[arg(long, default_value_t = true)]
     kube: bool,
+
+    #[arg(long)]
+    local: bool,
 
     #[arg(long)]
     endpoints: Option<String>,
@@ -77,20 +79,22 @@ pub async fn run_cli() -> anyhow::Result<()> {
 
     let state: Arc<RwLock<HashMap<String, Vec<Connection>>>> = Arc::new(RwLock::new(HashMap::new()));
 
-    let endpoints_list: Vec<String> = if let Some(s) = args.endpoints.clone() {
+    let endpoints_list: Vec<String> = if args.local {
+        vec!["http://localhost:8080".to_string()]
+    } else if let Some(s) = args.endpoints.clone() {
         s.split(',').map(|s| s.trim().to_string()).collect()
-    } else if args.kube {
-        discover_pods().await?
     } else {
-        vec![]
+        discover_pods().await?
     };
 
     let did_fetch_once = Arc::new(AtomicBool::new(false));
-    if args.kube || !endpoints_list.is_empty() {
+    let is_kube_mode = args.kube || (!args.local && args.endpoints.is_none());
+    if !endpoints_list.is_empty() {
         let state_clone = state.clone();
         let endpoints_clone = endpoints_list.clone();
         let start_port = args.start_port;
-        let kube_mode = args.kube;
+        let kube_mode = is_kube_mode;
+        let local_mode = args.local;
         let did_fetch = did_fetch_once.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(2));
@@ -104,6 +108,11 @@ pub async fn run_cli() -> anyhow::Result<()> {
                             let node = resp.node_name.unwrap_or_else(|| pod.clone());
                             map.insert(node, resp.connections);
                         }
+                    }
+                } else if local_mode {
+                    if let Ok(resp) = fetch_url("http://localhost:8080/connections").await {
+                        let node = resp.node_name.unwrap_or_else(|| "localhost".to_string());
+                        map.insert(node, resp.connections);
                     }
                 } else {
                     for ep in &endpoints_clone {
@@ -120,6 +129,6 @@ pub async fn run_cli() -> anyhow::Result<()> {
         });
     }
 
-    run_tui(state, args.kube, did_fetch_once).await?;
+    run_tui(state, is_kube_mode, did_fetch_once).await?;
     Ok(())
 }

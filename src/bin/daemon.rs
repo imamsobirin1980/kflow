@@ -16,6 +16,8 @@ pub struct Connection {
     pub dst_ip: IpAddr,
     pub dst_port: u16,
     pub state: String,
+    pub bytes: u64,
+    pub throughput_bytes_per_sec: u64,
 }
 
 type SharedConnections = Arc<RwLock<Vec<Connection>>>;
@@ -41,16 +43,38 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state: SharedConnections = Arc::new(RwLock::new(Vec::new()));
-    let node_name = std::env::var("KUBE_NODE_NAME").ok();
+    let node_name = std::env::var("KUBE_NODE_NAME").ok().or_else(|| {
+        hostname::get().ok().and_then(|h| h.into_string().ok())
+    });
     
     {
         let state = state.clone();
         let path = conntrack_path.clone();
         tokio::spawn(async move {
-            use std::collections::HashSet;
+            use std::collections::{HashMap, HashSet};
             let mut prev_set: HashSet<Connection> = HashSet::new();
+            let mut prev_bytes: HashMap<(String, String, u16, String, u16), u64> = HashMap::new();
+            let sample_interval = 2u64;
+            
             loop {
-                let flows = read_conntrack(&path);
+                let mut flows = read_conntrack(&path);
+
+                for flow in &mut flows {
+                    let key = (
+                        flow.proto.clone(),
+                        flow.src_ip.to_string(),
+                        flow.src_port,
+                        flow.dst_ip.to_string(),
+                        flow.dst_port,
+                    );
+                    
+                    if let Some(&prev_byte_count) = prev_bytes.get(&key) {
+                        let byte_delta = flow.bytes.saturating_sub(prev_byte_count);
+                        flow.throughput_bytes_per_sec = byte_delta / sample_interval;
+                    }
+                    
+                    prev_bytes.insert(key, flow.bytes);
+                }
                 
                 let new_set: HashSet<Connection> = flows.iter().cloned().collect();
                 for added in new_set.difference(&prev_set) {
@@ -65,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
                     let mut w = state.write().await;
                     *w = flows;
                 }
-                sleep(Duration::from_secs(2)).await;
+                sleep(Duration::from_secs(sample_interval)).await;
             }
         });
     }
@@ -196,6 +220,10 @@ async fn list_connections(
 }
 
 fn read_conntrack(path: &str) -> Vec<Connection> {
+    read_conntrack_file(path)
+}
+
+fn read_conntrack_file(path: &str) -> Vec<Connection> {
     let mut path_to_use = path.to_string();
     if path_to_use.is_empty() {
         if let Some(detected) = detect_conntrack_candidate() {
@@ -204,7 +232,6 @@ fn read_conntrack(path: &str) -> Vec<Connection> {
                 eprintln!("detected conntrack path during read: {}", path_to_use);
             }
         } else {
-            // No conntrack file available right now; return empty list silently
             return vec![];
         }
     }
@@ -223,10 +250,7 @@ fn read_conntrack(path: &str) -> Vec<Connection> {
     let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
 
     if std::env::var("KFLOW_DEBUG").is_ok() {
-        eprintln!("read_conntrack: read {} lines from {}", lines.len(), path_to_use);
-        for (i, ln) in lines.iter().enumerate().take(5) {
-            eprintln!("  [{}] {}", i, ln);
-        }
+        eprintln!("read_conntrack_file: read {} lines from {}", lines.len(), path_to_use);
     }
 
     lines
@@ -241,12 +265,20 @@ fn parse_conntrack_line(line: &str) -> Option<Connection> {
         return None;
     }
 
+    let debug = std::env::var("KFLOW_DEBUG").is_ok();
+    
+    static SAMPLE_PRINTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if debug && !SAMPLE_PRINTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("Sample conntrack line: {}", line);
+    }
+    
     let mut proto: Option<String> = None;
     let mut state: Option<String> = None;
     let mut src_ip: Option<IpAddr> = None;
     let mut dst_ip: Option<IpAddr> = None;
     let mut src_port: Option<u16> = None;
     let mut dst_port: Option<u16> = None;
+    let mut bytes = 0u64;
 
     for p in &parts {
         if proto.is_none() && (*p == "tcp" || *p == "udp") {
@@ -259,6 +291,13 @@ fn parse_conntrack_line(line: &str) -> Option<Connection> {
             src_port = p["sport=".len()..].parse().ok();
         } else if p.starts_with("dport=") && dst_port.is_none() {
             dst_port = p["dport=".len()..].parse().ok();
+        } else if p.starts_with("bytes=") {
+            if let Ok(b) = p["bytes=".len()..].parse::<u64>() {
+                bytes += b;
+                if debug && bytes > 0 {
+                    eprintln!("Found bytes={} in conntrack line", b);
+                }
+            }
         } else if state.is_none()
             && (*p == "ESTABLISHED"
                 || *p == "SYN_SENT"
@@ -277,5 +316,7 @@ fn parse_conntrack_line(line: &str) -> Option<Connection> {
         dst_ip: dst_ip?,
         dst_port: dst_port?,
         state: state.unwrap_or_else(|| "UNKNOWN".into()),
+        bytes,
+        throughput_bytes_per_sec: 0,
     })
 }
